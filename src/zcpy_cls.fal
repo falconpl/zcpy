@@ -1,0 +1,77 @@
+/*
+   The Falcon Programming Language.
+
+   zcpy -- A zone/directory replicator.
+   
+   Class file definition.
+*/
+
+enum Modes
+   dir = "dir"
+   file = "file"
+   wcard = "wcard"
+end
+
+
+class CopyDef( type, source, dest, slink )
+   type = type
+   slink = slink == nil ? true : slink
+   source = source
+   dest = dest
+end
+
+
+/*# Moves a directory.
+@param source the source directory.
+@param dest the destination directory.
+@param recursive if false, won't descend into subdirectory. The 	default is to descend.
+@param slink false to copy symlinks as files. Default is to
+	replicate the symlink.
+*/
+class Dir( source, dest, recursive, slink ) from \
+      CopyDef( Modes.dir, source, dest, slink )
+   exclude = nil
+   recursive = recursive == nil ? true : recursive
+end
+
+/*# Moves a directory, excluding some file.
+@param source the source directory.
+@param dest the destination directory.
+@param exclude a string or array of strings of file wildcards. If 	matching, the file or directory is not copied.
+@param recursive if false, won't descend into subdirectory. The 	default is to descend.
+@param slink false to copy symlinks as files. Default is to
+	replicate the symlink.
+*/
+
+class EDir( source, dest, exclude, recursive, slink ) from \
+      CopyDef( Modes.dir, source, dest, slink )
+   exclude = exclude
+   recursive = recursive == nil ? true : recursive
+end
+
+
+/*# Moves a single file.
+@param source the source file.
+@param dest the destination directory (or file).
+@param slink false to copy symlinks as files. Default is to
+	replicate the symlink.
+*/
+
+class File( source, dest, slink ) from \
+   CopyDef( Modes.file, source, dest, slink )
+end
+
+/*# Moves a set of wilcard matching files.
+@param source the source directory.
+@param dest the destination directory.
+@param wcard a string or array of strings of file wildcards
+@param slink false to copy symlinks as files. Default is to
+	replicate the symlink.
+*/
+
+class WCard( source, dest, wcard, slink ) from \
+      CopyDef( Modes.wcard, source, dest, slink )
+   wcard = wcard
+end
+
+export Modes, WCard, File, EDir, Dir, CopyDef

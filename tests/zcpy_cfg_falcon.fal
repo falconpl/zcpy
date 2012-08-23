@@ -1,0 +1,12 @@
+/*
+   zcpy -- configuration to copy a minimally working Falcon
+*/
+
+root="/usr/local"
+dest="/tmp/falcon"
+
+zcpy = .[
+   File( @"$root/bin/falcon", @"$dest/bin/")
+   Dir( @"$root/lib/falcon", @"$dest/lib/falcon")
+   WCard( @"$root/lib", @"$dest/lib", "libfalcon*" )
+]

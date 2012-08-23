@@ -1,0 +1,549 @@
+#!/usr/bin/env falcon
+/********************************************************
+   The Falcon Programming Language.
+
+   zcpy -- A zone/directory replicator.
+*/
+
+import from compiler in compiler
+load zcpy_cls
+
+const VERSION="1.0"
+const defcat = "/var/cache/zcpy.cache"
+
+/*********************************************
+    Command line parser
+**********************************************/
+
+object Options from CmdlineParser
+   files = []
+   loglevel = 1
+   repofile = defcat
+   valid = true
+   force = false
+   preserve = false
+   showVersion = false
+
+   
+   function onOption( option )
+      switch option
+         case "?", "help"
+            self.usage()
+            self.valid = false
+         case "c", "l"
+            self.expectValue()
+         case "f"
+            self.force = true
+         case "p"
+            self.preserve = true
+         case "v", "version"
+            self.showVersion = true
+         default
+            self.unrecognized( option )
+      end
+   end
+   
+   function onValue( option, value )
+      switch option
+         case "c"
+            self.repofile = value
+         case "l"
+            try
+                self.loglevel = int( value )
+                if self.loglevel < 0  or self.loglevel > 3: raise ""
+            catch
+                > "Invalid numeric value for -l option"
+                self.valid = false
+            end
+      end
+      // can't be anything else, as this function call must
+      // be authorized from onOption
+   end
+   
+   function onFree( param )
+      self.files += param
+   end
+   
+   function onSwitchOff( sw )
+      switch sw
+        case 'p'
+            self.preserve = false
+         case 'f'
+            self.force = false
+         default
+            self.unrecognized( sw )
+      end
+   end
+   
+   function unrecognized( option )
+      > "Unknown option ", option
+      self.valid = false
+   end
+   
+   function usage()
+      > "zcpy.fal [options] conf1.fal conf2.fal ..."
+      > "  Options: "
+      > "    -c <file>     Catalog file (defaults to '" + defcat + "')"
+      > "    -p            Purge (re-create catalog)"
+      > "    -?, --help    Shows this usage"
+      > "    -l <0..3>     Log level (0=silent, 3=verbose)"
+      > "    -v            Show version"
+   end
+   
+   function version()
+      > "zcpy.fal ", VERSION
+   end
+end
+
+/*********************************************
+    Catalog
+**********************************************/
+
+object Catalog
+   files = [=>]
+   months = .[
+      31 *24*60*60
+      28 *24*60*60
+      31 *24*60*60
+      30 *24*60*60
+      31 *24*60*60
+      30 *24*60*60
+      31 *24*60*60
+      31 *24*60*60
+      30 *24*60*60
+      31 *24*60*60
+      31 *24*60*60
+      31 *24*60*60
+   ]
+   year = 31 *24*60*60 +
+      28 *24*60*60 +
+      31 *24*60*60+
+      30 *24*60*60+
+      31 *24*60*60+
+      30 *24*60*60+
+      31 *24*60*60+
+      31 *24*60*60+
+      30 *24*60*60+
+      31 *24*60*60+
+      31 *24*60*60+
+      31 *24*60*60
+      
+   function restoreFrom( name )
+      try
+         stream = InputStream(name)
+         self.restore(stream)
+         stream.close()
+      catch IoError in e
+         log(1, "Can't open catalog " + name )
+         return false
+      end
+      
+      return true
+   end
+   
+   function restore( stream )
+      data = ""
+      line = 0
+      dict = self.files
+      while not stream.eof()
+         line++
+         stream.readLine( data, 4096 )
+         if not data: continue
+         pos = data.rfind(":")
+         if pos == -1 
+            log(1,"malformed line in catalog:" +line)
+            continue
+         end
+         
+         fname = data[0:pos]
+         try
+            ts = int(data[pos+1:])
+         catch in e 
+            log(1,"malformed line in catalog:" +line)
+            continue
+         end
+         
+         dict[fname] = ts
+      end
+   end
+   
+   function storeTo( name )
+      try
+         stream = OutputStream(name)
+         self.store(stream)
+         stream.close()
+      catch IoError in e
+         log(0, "Cant' create catalog file " + name )
+         return false
+      end
+      
+      return true
+   end   
+   
+   function store( stream )
+      for key, value in self.files
+         stream.writeText( key )
+         stream.writeText( ":" + value + "\n" )
+      end
+   end
+   
+   function check( date, fname )
+      dt = self.toSecs( date )
+      fname = self.canonicize( fname )
+      
+      if Options.force or fname notin self.files
+         self.files[fname] = dt
+         return true
+      else
+         dt2 = self.files[fname]
+         if dt2 < dt
+            self.files[fname] = dt2
+            return true
+         end
+      end
+      
+      return false
+   end
+   
+   
+   function toSecs( date )
+      time = (date.year-1970)* self.year + 
+         self.months[date.month-1] +
+         date.day * 24 * 60 * 60 +
+         date.hour * 60 * 60 +
+         date.minute * 60 + 
+         date.second
+      
+      // add leap count
+      time += (((date.year-1)-1970)%4)*24 * 60 * 60
+      // add current year leap count
+      if date.year % 4 == 0 and date.month >= 3
+         time += 24 * 60 * 60
+      end
+      return time
+   end
+   
+   
+   function canonicize( filein )
+      file = filein
+      if not file.startsWith( "/" )
+         file = dirCurrent() + "/" + file
+      end
+      
+      while (pos = file.find("/../")) > -1
+         if pos == 0
+            file = file[3:]
+         end
+         
+         pos1 = file.rfind("/",pos-1)
+         file = file[0:pos1] + file[pos+3:]
+      end
+      
+      while (pos = file.find("/./" )) > -1
+         file = file[0:pos] + file[pos+2:]
+      end
+      
+      return file
+   end
+   
+end
+
+/*********************************************
+    Loader
+**********************************************/
+
+object Loader
+   _comp = nil
+   
+   init
+      self._comp = compiler.Compiler()
+      self._comp.launchAtLink = true
+   end
+   
+   function get( file )
+      module = self._comp.loadFile( file )
+      func = module.get("zcpy")
+      if func == nil: raise "zcpy not found"
+      return func
+   end
+end
+
+
+/*********************************************
+    Utilities
+**********************************************/
+
+function log( lvl, str )
+   if Options.loglevel >= lvl
+      >> "zcpy.fal: "
+      
+      switch( lvl )
+         case 0
+            >> "CRITICAL: "
+         case 1
+            >> "WARNING: "
+         case 3
+            >> "DBG: "
+         // else, no problem.
+      end
+      
+      > str
+   end
+end
+
+
+/*********************************************
+    Main program
+**********************************************/
+// parse command line.
+Options.parse()
+if not Options.valid
+   // message already written.
+   return 0
+end
+
+if Options.showVersion
+   Options.version()
+end
+
+if not Options.files
+   log(2, "Nothing to do.")
+   return 0
+end
+
+// first, try to restore the catalog.
+if not Catalog.restoreFrom( Options.repofile )
+   // just in case, try to store it.
+   if not Catalog.storeTo( Options.repofile )
+      // message already shown
+      return 1
+   end
+end
+
+// prepare a common utility here
+fs = FileStat()
+
+// we can process the configurations
+for file in Options.files
+   process( file )
+end
+
+// time to save.
+log(2, "Copy complete, saving catalog" )
+if not Catalog.storeTo( Options.repofile )
+   // message already shown
+   return 1
+end
+
+log(2, "Done." )
+
+// correct return
+return 0
+
+
+/*********************************************
+    Process a single configuration file
+**********************************************/
+
+function process( file )
+   try
+      conf = Loader.get( file )
+      if conf.typeId() != ArrayType
+         log(1, "Invalid configuration file '" + file + "':\n" + 
+            "'zcpy' is not an array")
+         return false
+      end
+      
+   catch StringType in error
+      log(1, error)
+      return false
+   catch in error
+      log(1, "Invalid configuration file '" + file + "':\n" + error )
+      return false
+   end
+   
+   return processConfig( conf )   
+end
+
+
+function processConfig( conf )
+   for entry in conf
+      if not entry.derivedFrom( CopyDef )
+         raise "Copy definition is not valid in 'zcpy'"
+      end
+      
+      if entry.type == Modes.dir
+         processDirEntry( entry )
+      elif entry.type == Modes.file
+         processFileEntry( entry )
+      elif entry.type == Modes.wcard
+         processWCardEntry( entry )
+      else
+         raise "Unknown entry type '" + entry.type + "'"
+      end
+   end
+end
+
+
+function processDirEntry( entry )
+   source = Catalog.canonicize( entry.source )
+   dest = Catalog.canonicize( entry.dest )
+   dir = Directory( source )
+   
+   if entry.recursive
+      dir.descend(
+         { dir => 
+            log(3, "Descending dir " + dir )
+         },
+         
+         { file =>
+            if excludeFile( file, entry.exclude )
+               log(3, "Filtering out " + file )
+               return
+            end
+            
+            copyFile( file, entry.dest + file[source.len():], entry.slink )
+         }
+      )
+   else
+      while (file = dir.read()) != nil        
+            
+         if excludeFile( file, entry.exclude )
+            log(3, "Filtering out " + file )
+            continue
+         end
+         copyFile( entry.source + "/" + file, entry.dest + "/" + file, entry.slink )
+      end
+   end
+   
+   dir.close()
+end
+
+
+function excludeFile( file, wexclude )        
+   if wexclude
+      // to be escluded?
+      if wexclude.typeId() == StringType
+         if strWildcardMatch( fileName( file ), wexclude )
+            return
+         end
+      elif wexclude.typeId() == ArrayType
+         for wcard in wexclude
+            if strWildcardMatch( fileName( file ), wcard )
+               return
+            end
+         end
+      end                              
+   end
+end
+
+
+function processFileEntry( entry )
+   dest = entry.dest
+   if dest.endsWith("/")
+      dest += fileName(entry.source)
+   end
+   return copyFile( entry.source, dest, entry.slink )
+end   
+
+
+function copyFile( source, dest, slink )
+   if not fs.read( source )
+      log(1, "Cannot access required file '" + source +"'" )
+      return false
+   end
+   
+   try
+      if fs.ftype == FileStat.NORMAL
+         // check in catalog?
+         if Catalog.check( fs.mtime, source )
+            log(2, "Copying '" + source + "' to '" + dest +"'")
+            storeFile( source, dest, fs )
+         else
+            log(3, "Skipping '" + source + "'")
+         end
+            
+      elif fs.ftype == FileStat.LINK
+         if Catalog.check( fs.mtime, source )
+            if slink
+               tgdir = filePath( dest )
+               if tgdir      
+                  makePaths( tgdir, fs )      
+               end
+               
+               log(2, "Linking '" + source + "' to '" + dest +"'")
+               dirMakeLink( dirReadLink( source ), dest )
+            else
+               log(2, "Copying '" + source + "' to '" + dest +"'")
+               storeFile( source, dest, fs )
+            end
+         else
+            log(3, "Skipping '" + source + "'")
+         end
+      else            
+         log(1, "Required file '" + source + "' cannot be copied (not a file)" )
+      end
+   catch IoError in e
+      log(1, "Error while copying '" + source + "':\n"+e)
+   end
+end
+
+
+function processWCardEntry( entry )
+   dir = Directory( entry.source )
+   
+   doTest = entry.wcard
+   while (file = dir.read())
+      if not strWildcardMatch( fileName( file ), doTest )
+         continue
+      end
+         
+      copyFile( entry.source + "/" + file, entry.dest+ "/" + file, entry.slink )
+   end
+   
+   dir.close()
+end
+
+
+function storeFile( source, dest, fs )
+
+   tgdir = filePath( dest )
+   if tgdir      
+      makePaths( tgdir, fs )      
+   end
+   
+   fileCopy( source, dest )
+   
+   if Options.preserve
+      fileChmod( dest, fs.access )
+      fileChown( dest, fs.owner )
+      fileChgroup( dest, fs.group )
+   end
+end
+
+
+function makePaths( tgdir, fs )
+   
+   base = Catalog.canonicize( tgdir )
+   paths = strSplit( base, "/")
+   totPath = ""
+   
+   for p in paths
+      if not p: continue
+      totPath += "/" + p 
+      t = fileType( totPath )      
+      if t == FileStat.NOTFOUND
+         dirMake( totPath, false )
+         fileChmod( totPath, 0755 )
+         
+         if Options.preserve
+            fileChown( totPath, fs.owner )
+            fileChgroup( totPath, fs.group )
+         end
+      elif t != FileStat.DIR
+         raise "Target location '" + totPath + "' is not a directory"
+      end
+   end
+end
+
+
