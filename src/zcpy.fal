@@ -425,12 +425,12 @@ function excludeFile( file, wexclude )
       // to be escluded?
       if wexclude.typeId() == StringType
          if strWildcardMatch( fileName( file ), wexclude )
-            return
+            return true
          end
       elif wexclude.typeId() == ArrayType
          for wcard in wexclude
             if strWildcardMatch( fileName( file ), wcard )
-               return
+               return true
             end
          end
       end                              
